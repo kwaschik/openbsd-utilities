@@ -83,110 +83,115 @@ main(int argc, char **argv, char **envp)
 	}
 
 	passwdFile = fopen("/etc/mail/vpasswd", "r+");
-	if (passwdFile) {
-		/* CGI: Input (request body) kommt über stdin */
-		scanf("%s", input);
-		/* Content-Type ist 'x-www-form-urlencoded', das bedeutet,
-		 * die Daten sind url-kodiert und müssen daher jetzt
-		 * entsprechend dekodiert werden.
-		 */
-		//fprintf(stderr, "%s\n", input);
-		// TODO evtl. fehlende Prüfungen, s. nach while (explizit wäre besser)
-		input = url_decode(input);
-		//fprintf(stderr, "%s\n", input);
+	if (passwdFile == NULL) {
+		printf("Status: 500 Internal Server Error\n");
+		goto end;
+	}
 
-		email = oldpw = newpw = NULL;
-		while (input) {
-			/* 
-			 * Encoding 'x-www-form-urlencoded' bedeutet, dass die
-			 * Form-Elemente als <key>=<value>-Paare kommen, die
-			 * durch '&' verbunden sind.
-			 */
-			item = strsep(&input, "&");
-			if (item) {
-				key = strsep(&item, "=");
-				if (key) {
-					/* Relevante Keys finden und Values speichern. */
-					if (strcmp("email", key) == 0) {
-						email = item;
-					} else if (strcmp("oldpw", key) == 0) {
-						oldpw = item;
-					} else if (strcmp("newpw", key) == 0) {
-						newpw = item;
-					} 
-				}
+	/* CGI: Input (request body) kommt über stdin */
+	scanf("%s", input);
+	/* Content-Type ist 'x-www-form-urlencoded', das bedeutet,
+	 * die Daten sind url-kodiert und müssen daher jetzt
+	 * entsprechend dekodiert werden.
+	 */
+	//fprintf(stderr, "%s\n", input);
+	// TODO evtl. fehlende Prüfungen, s. nach while (explizit wäre besser)
+	input = url_decode(input);
+	//fprintf(stderr, "%s\n", input);
+
+	email = oldpw = newpw = NULL;
+	while (input) {
+		/* 
+		 * Encoding 'x-www-form-urlencoded' bedeutet, dass die
+		 * Form-Elemente als <key>=<value>-Paare kommen, die
+		 * durch '&' verbunden sind.
+		 */
+		item = strsep(&input, "&");
+		if (item) {
+			key = strsep(&item, "=");
+			if (key) {
+				/* Relevante Keys finden und Values speichern. */
+				if (strcmp("email", key) == 0) {
+					email = item;
+				} else if (strcmp("oldpw", key) == 0) {
+					oldpw = item;
+				} else if (strcmp("newpw", key) == 0) {
+					newpw = item;
+				} 
 			}
 		}
-		/* Die Values sind base64-kodiert und müssen daher noch dekodiert werden. */
-		if (email) {
-			if (b64_pton(email, decoded, contSize) >= 0) {
-				email = strsep(&decoded, "@");
-				if (strlen(email) < contSize) {
-					email[strlen(email)+1] = '\0';
-					email[strlen(email)] = ':';
-					// TODO fehlende Prüfungen
-					user = malloc(strlen(email)+1);
-					strlcpy(user, email, strlen(email)+1);
-					
-					/* Benutzer in passwdfile suchen */
-					while ((passwdLineLen = getline(&passwdLine, &passwdLineSize, passwdFile)) != -1) {
-						if (strstr(passwdLine, user) != NULL)
-							break;
-					}
-					/* Benutzer wurde nicht gefunden */
-					/* TODO: unterscheiden zw. error und eof */
-					if (passwdLineLen == -1) {
-						printf("Status: 422 Unprocessable Entity\n");
-						goto end;
+	}
+	/* Die Values sind base64-kodiert und müssen daher noch dekodiert werden. */
+	if (email) {
+		if (b64_pton(email, decoded, contSize) >= 0) {
+			email = strsep(&decoded, "@");
+			if (strlen(email) < contSize) {
+				email[strlen(email)+1] = '\0';
+				email[strlen(email)] = ':';
+				// TODO fehlende Prüfungen
+				user = malloc(strlen(email)+1);
+				strlcpy(user, email, strlen(email)+1);
+				
+				/* Benutzer in passwdfile suchen */
+				fpos_t pos = 0;
+				while ((passwdLineLen = getline(&passwdLine, &passwdLineSize, passwdFile)) != -1) {
+					if (strstr(passwdLine, user) != NULL)
+						break;
+					fgetpos(passwdFile, &pos);
+				}
+				/* Benutzer wurde nicht gefunden */
+				/* TODO: unterscheiden zw. error und eof */
+				if (passwdLineLen == -1) {
+					printf("Status: 422 Unprocessable Entity\n");
+					goto end;
 
-					}
+				}
 
-					/* Altes PW des Benutzers überprüfen */
-					if (oldpw) {
-						memset(decoded, '\0', contSize+1);
-						if (b64_pton(oldpw, decoded, contSize) >= 0) {
-							// TODO fehlende Prüfungen
-							sscanf(passwdLine, "%*[^:]:%s", hash);
-							if (crypt_checkpass(decoded, hash) != 0) {
-								printf("Status: 422 Unprocessable Entity\n");
-								goto end;
-							}
-						} else {
-							// TODO
+				/* Altes PW des Benutzers überprüfen */
+				if (oldpw) {
+					memset(decoded, '\0', contSize+1);
+					if (b64_pton(oldpw, decoded, contSize) >= 0) {
+						// TODO fehlende Prüfungen
+						sscanf(passwdLine, "%*[^:]:%s", hash);
+						if (crypt_checkpass(decoded, hash) != 0) {
+							printf("Status: 422 Unprocessable Entity\n");
+							goto end;
 						}
 					} else {
-						printf("Status: 422 Unprocessable Entity\n");
-						goto end;
-					}
-
-					/* Neues PW des Benutzers speichern */
-					if (newpw) {
-						memset(decoded, '\0', contSize+1);
-						if (b64_pton(newpw, decoded, contSize) >= 0) {
-							// TODO fehlende Prüfungen
-							crypt_newhash(decoded, "bcrypt,8", hash, sizeof(hash));
-							fprintf(passwdFile, "%s%s\n", user, hash);
-						} else {
-							// TODO
-						}
-					} else {
-						printf("Status: 422 Unprocessable Entity\n");
-						goto end;
+						// TODO
 					}
 				} else {
-					printf("Status: 500 Internal Server Error\n");
+					printf("Status: 422 Unprocessable Entity\n");
+					goto end;
+				}
+
+				/* Neues PW des Benutzers speichern */
+				if (newpw) {
+					memset(decoded, '\0', contSize+1);
+					if (b64_pton(newpw, decoded, contSize) >= 0) {
+						// TODO fehlende Prüfungen
+						crypt_newhash(decoded, "bcrypt,8", hash, sizeof(hash));
+						fsetpos(passwdFile, &pos);
+						fprintf(passwdFile, "%s%s\n", user, hash);
+					} else {
+						// TODO
+					}
+				} else {
+					printf("Status: 422 Unprocessable Entity\n");
 					goto end;
 				}
 			} else {
-				// TODO
+				printf("Status: 500 Internal Server Error\n");
+				goto end;
 			}
 		} else {
-			printf("Status: 422 Unprocessable Entity\n");
-			goto end;
+			// TODO
 		}
-		printf("Status: 204 No Content\n");
-	} else
-		printf("Status: 500 Internal Server Error\n");
+	} else {
+		printf("Status: 422 Unprocessable Entity\n");
+		goto end;
+	}
+	printf("Status: 204 No Content\n");
 
 end:
 	printf("\n");
