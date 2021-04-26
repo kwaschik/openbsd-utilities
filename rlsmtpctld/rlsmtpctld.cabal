@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                rlsmtpctld
-version:             0.1.0.0
+version:             0.2.0.0
 -- synopsis:
 -- description:
 license:             MIT
@@ -16,6 +16,7 @@ extra-source-files:  CHANGELOG.md
 cabal-version:       >=1.10
 
 executable rlsmtpctld
+  ghc-options:	       -optl-static -optl-pthread
   main-is:             Main.hs
   -- other-modules:
   -- other-extensions:
