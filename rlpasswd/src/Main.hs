@@ -9,6 +9,7 @@ import Data.List
 import Foreign.C.String
 import Foreign.C.Types
 import Foreign.Marshal.Alloc
+import Foreign.Ptr
 import Network.CGI
 import Network.Socket
 import Network.Socket.ByteString (recv, sendAll)
@@ -18,6 +19,10 @@ foreign import ccall "crypt_checkpass"
         crypt_checkpass :: CString -> CString -> IO CInt
 foreign import ccall "crypt_newhash" 
         crypt_newhash :: CString -> CString -> CString -> Int -> IO CInt
+foreign import ccall "unveil"
+        unveil :: CString -> CString -> IO CInt
+foreign import ccall "pledge"
+        pledge :: CString -> CString -> IO CInt
 
 readFileStrict :: String -> IO String
 readFileStrict file = withFile file ReadMode $ \handle ->
@@ -64,6 +69,10 @@ processEntry email oldpw newpw line =
 
 cgiMain :: CGI CGIResult
 cgiMain = do
+        liftIO $ do
+                call unveil "/etc/mail/vpasswd" "rcw"
+                call unveil "/rlsmtpctl.sock" "rw"
+                call pledge "stdio rpath wpath cpath unix" "NULL"
         setHeader "Content-type" "text/plain"
         c <- getVar "CONTENT_TYPE"
         if c == Just "application/x-www-form-urlencoded"
@@ -74,7 +83,8 @@ cgiMain = do
                                 new_cont <- mapM (processEntry email oldpw newpw) $ lines fcont
                                 let new_fcont = unlines $ map (fromRight "") new_cont
                                 if any isLeft new_cont || fcont == new_fcont
-                                then outputError 422 "Unprocessable Entity" ["processing error"]
+                                then outputError 422 "Unprocessable Entity" ["processing error"
+                                                                            , unlines $ map (fromLeft "") new_cont]
                                 else do msg <- liftIO $ do
                                                 writeFile' "/etc/mail/vpasswd" new_fcont
                                                 sock <- socket AF_UNIX Stream defaultProtocol
@@ -88,6 +98,10 @@ cgiMain = do
                                         outputNothing
                         _ -> outputError 422 "Unprocessable Entity" ["inputs"]
         else  outputError 406 "Not Acceptable" ["no x-www-form-urlencoded"]
+        where call syscall str1 "NULL" =
+                withCString str1 $ \p1 -> syscall p1 nullPtr
+              call syscall str1 str2 = 
+                withCString str1 $ \p1 -> withCString str2 $ \p2 -> syscall p1 p2
 
 main :: IO ()
 main = runCGI (handleErrors cgiMain)
